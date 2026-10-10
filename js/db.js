@@ -1,6 +1,6 @@
 // Capa de acceso a IndexedDB para la app de entrenamientos.
 const DB_NAME = 'gym-tracker-db';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 let dbPromise = null;
 
@@ -21,6 +21,10 @@ function openDB() {
         const entries = db.createObjectStore('entries', { keyPath: 'id', autoIncrement: true });
         entries.createIndex('date', 'date');
         entries.createIndex('exerciseId', 'exerciseId');
+      }
+
+      if (!db.objectStoreNames.contains('routines')) {
+        db.createObjectStore('routines', { keyPath: 'id', autoIncrement: true });
       }
     };
 
@@ -89,13 +93,37 @@ export const db = {
     return all.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.createdAt - b.createdAt));
   },
 
+  async addRoutine(routine) {
+    const store = await tx('routines', 'readwrite');
+    const id = await wrap(store.add({ ...routine, createdAt: Date.now() }));
+    return { ...routine, id };
+  },
+
+  async updateRoutine(routine) {
+    const store = await tx('routines', 'readwrite');
+    await wrap(store.put(routine));
+    return routine;
+  },
+
+  async deleteRoutine(id) {
+    const store = await tx('routines', 'readwrite');
+    await wrap(store.delete(id));
+  },
+
+  async getRoutines() {
+    const store = await tx('routines');
+    const all = await wrap(store.getAll());
+    return all.sort((a, b) => b.createdAt - a.createdAt);
+  },
+
   async exportAll() {
-    const [exercises, entries] = await Promise.all([this.getExercises(), this.getEntries()]);
+    const [exercises, entries, routines] = await Promise.all([this.getExercises(), this.getEntries(), this.getRoutines()]);
     return {
       version: DB_VERSION,
       exportedAt: new Date().toISOString(),
       exercises,
       entries,
+      routines,
     };
   },
 
@@ -105,7 +133,7 @@ export const db = {
     }
 
     if (replace) {
-      await Promise.all([this.clearStore('exercises'), this.clearStore('entries')]);
+      await Promise.all([this.clearStore('exercises'), this.clearStore('entries'), this.clearStore('routines')]);
     }
 
     const exerciseIdMap = new Map();
@@ -127,6 +155,13 @@ export const db = {
       const { id, ...rest } = entry;
       await this.addEntry({ ...rest, exerciseId: newExerciseId });
     }
+
+    if (Array.isArray(data.routines)) {
+      for (const routine of data.routines) {
+        const { id, ...rest } = routine;
+        await this.addRoutine(rest);
+      }
+    }
   },
 
   async clearStore(storeName) {
@@ -135,6 +170,6 @@ export const db = {
   },
 
   async clearAll() {
-    await Promise.all([this.clearStore('exercises'), this.clearStore('entries')]);
+    await Promise.all([this.clearStore('exercises'), this.clearStore('entries'), this.clearStore('routines')]);
   },
 };

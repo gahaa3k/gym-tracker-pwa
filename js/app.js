@@ -11,10 +11,12 @@ const VIEW_TITLES = {
   log: 'Registrar',
   history: 'Historial',
   progress: 'Progreso',
+  routines: 'Rutinas',
   settings: 'Ajustes',
 };
 
 let editingEntry = null; // entry being edited, prefills the log view
+let editingRoutine = null; // routine being edited, prefills the routines view
 let progressState = { exerciseId: null, metric: 'max' };
 let historyState = { exerciseFilter: 'all' };
 
@@ -380,6 +382,169 @@ async function renderProgressChart() {
   `;
 }
 
+// ---------- Vista: Rutinas ----------
+
+function routineExerciseRowTemplate(index, name = '', sets = '', reps = '') {
+  const row = document.createElement('div');
+  row.className = 'routine-exercise-row';
+  row.innerHTML = `
+    <span class="set-index">${index}</span>
+    <input type="text" list="routine-exercise-list" placeholder="Ejercicio" class="routine-ex-name" value="${escapeHtml(name)}" autocomplete="off" />
+    <input type="number" inputmode="numeric" step="1" min="0" placeholder="Series" class="routine-ex-sets" value="${escapeHtml(sets)}" />
+    <input type="text" placeholder="Reps" class="routine-ex-reps" value="${escapeHtml(reps)}" />
+    <button type="button" class="btn-icon remove-routine-ex" aria-label="Eliminar ejercicio">✕</button>
+  `;
+  return row;
+}
+
+function renumberRoutineRows(container) {
+  [...container.querySelectorAll('.routine-exercise-row')].forEach((row, i) => {
+    row.querySelector('.set-index').textContent = i + 1;
+  });
+}
+
+async function renderRoutinesView() {
+  const [exercises, routines] = await Promise.all([db.getExercises(), db.getRoutines()]);
+  const prefill = editingRoutine;
+
+  viewRoot.innerHTML = `
+    <div class="card">
+      <h2>${prefill ? 'Editar rutina' : 'Nueva rutina'}</h2>
+      <div class="field">
+        <label for="routine-name">Nombre de la rutina</label>
+        <input type="text" id="routine-name" placeholder="Ej: Día de empuje" value="${escapeHtml(prefill ? prefill.name : '')}" />
+      </div>
+      <div class="field">
+        <label>Ejercicios</label>
+        <div id="routine-exercises-container"></div>
+        <button type="button" class="btn btn-secondary" id="add-routine-exercise-btn">+ Añadir ejercicio</button>
+      </div>
+      <datalist id="routine-exercise-list">
+        ${exercises.map((e) => `<option value="${escapeHtml(e.name)}"></option>`).join('')}
+      </datalist>
+      <button type="button" class="btn btn-primary" id="save-routine-btn">${prefill ? 'Guardar cambios' : 'Guardar rutina'}</button>
+      ${prefill ? '<button type="button" class="btn btn-secondary" id="cancel-routine-edit-btn" style="margin-top:8px">Cancelar edición</button>' : ''}
+    </div>
+    <div id="routines-list"></div>
+  `;
+
+  const container = document.getElementById('routine-exercises-container');
+  const initialExercises = prefill && prefill.exercises.length ? prefill.exercises : [{ name: '', sets: '', reps: '' }];
+  initialExercises.forEach((ex, i) => container.appendChild(routineExerciseRowTemplate(i + 1, ex.name, ex.sets, ex.reps)));
+
+  document.getElementById('add-routine-exercise-btn').addEventListener('click', () => {
+    container.appendChild(routineExerciseRowTemplate(container.children.length + 1));
+  });
+
+  container.addEventListener('click', (e) => {
+    if (e.target.classList.contains('remove-routine-ex')) {
+      const rows = container.querySelectorAll('.routine-exercise-row');
+      if (rows.length > 1) {
+        e.target.closest('.routine-exercise-row').remove();
+        renumberRoutineRows(container);
+      } else {
+        e.target.closest('.routine-exercise-row').querySelector('.routine-ex-name').value = '';
+        e.target.closest('.routine-exercise-row').querySelector('.routine-ex-sets').value = '';
+        e.target.closest('.routine-exercise-row').querySelector('.routine-ex-reps').value = '';
+      }
+    }
+  });
+
+  document.getElementById('save-routine-btn').addEventListener('click', saveRoutine);
+
+  if (prefill) {
+    document.getElementById('cancel-routine-edit-btn').addEventListener('click', () => {
+      editingRoutine = null;
+      renderRoutinesView();
+    });
+  }
+
+  renderRoutinesList(routines);
+}
+
+function renderRoutinesList(routines) {
+  const list = document.getElementById('routines-list');
+  if (!list) return;
+
+  if (!routines.length) {
+    list.innerHTML = `<div class="empty-state">Todavía no tienes rutinas guardadas.<br/>Crea una arriba para tenerla siempre a mano.</div>`;
+    return;
+  }
+
+  list.innerHTML = `
+    <h2 style="font-size:0.85rem;color:var(--text-muted);margin:0 0 10px 4px;">TUS RUTINAS</h2>
+    ${routines.map(routineItemHtml).join('')}
+  `;
+
+  attachRoutineItemEvents(list);
+}
+
+function routineItemHtml(routine) {
+  const chips = routine.exercises
+    .filter((ex) => ex.name)
+    .map((ex) => `<span class="chip">${escapeHtml(ex.name)}${ex.sets ? ` · ${escapeHtml(ex.sets)}x${escapeHtml(ex.reps || '?')}` : ''}</span>`)
+    .join('');
+  return `
+    <div class="entry-item" data-id="${routine.id}">
+      <div class="entry-head">
+        <strong>${escapeHtml(routine.name)}</strong>
+        <div>
+          <button class="btn-icon edit-routine" aria-label="Editar">✏️</button>
+          <button class="btn-icon delete-routine" aria-label="Eliminar">🗑️</button>
+        </div>
+      </div>
+      <div class="chips">${chips}</div>
+    </div>
+  `;
+}
+
+function attachRoutineItemEvents(container) {
+  container.querySelectorAll('.delete-routine').forEach((btn) => {
+    btn.addEventListener('click', async (e) => {
+      const id = Number(e.target.closest('.entry-item').dataset.id);
+      if (confirm('¿Eliminar esta rutina?')) {
+        await db.deleteRoutine(id);
+        showToast('Rutina eliminada');
+        navigate('routines', true);
+      }
+    });
+  });
+  container.querySelectorAll('.edit-routine').forEach((btn) => {
+    btn.addEventListener('click', async (e) => {
+      const id = Number(e.target.closest('.entry-item').dataset.id);
+      const routines = await db.getRoutines();
+      editingRoutine = routines.find((r) => r.id === id);
+      navigate('routines', true);
+    });
+  });
+}
+
+async function saveRoutine() {
+  const name = document.getElementById('routine-name').value.trim();
+  if (!name) return showToast('Escribe un nombre para la rutina');
+
+  const exercises = [...document.querySelectorAll('#routine-exercises-container .routine-exercise-row')]
+    .map((row) => ({
+      name: row.querySelector('.routine-ex-name').value.trim(),
+      sets: row.querySelector('.routine-ex-sets').value.trim(),
+      reps: row.querySelector('.routine-ex-reps').value.trim(),
+    }))
+    .filter((ex) => ex.name);
+
+  if (!exercises.length) return showToast('Añade al menos un ejercicio');
+
+  if (editingRoutine) {
+    await db.updateRoutine({ ...editingRoutine, name, exercises });
+    showToast('Rutina actualizada');
+    editingRoutine = null;
+  } else {
+    await db.addRoutine({ name, exercises });
+    showToast('Rutina guardada');
+  }
+
+  renderRoutinesView();
+}
+
 // ---------- Vista: Ajustes ----------
 
 async function renderSettingsView() {
@@ -471,6 +636,7 @@ async function navigate(view, force = false) {
   if (view === 'log') await renderLogView();
   else if (view === 'history') await renderHistoryView();
   else if (view === 'progress') await renderProgressView();
+  else if (view === 'routines') await renderRoutinesView();
   else if (view === 'settings') await renderSettingsView();
 }
 
@@ -478,6 +644,7 @@ bottomNav.addEventListener('click', (e) => {
   const btn = e.target.closest('button');
   if (!btn) return;
   editingEntry = null;
+  editingRoutine = null;
   navigate(btn.dataset.view);
 });
 

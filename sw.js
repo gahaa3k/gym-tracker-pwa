@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'gym-tracker-v1';
+const CACHE_VERSION = 'gym-tracker-v2';
 const APP_SHELL = [
   './',
   './index.html',
